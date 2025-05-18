@@ -1,0 +1,83 @@
+
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# Dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# Next.js build outputs
+/.next/
+/out/
+
+# Production build
+/build
+
+# Turbopack
+.turbo/
+
+# Static site generator files
+.jekyll-cache/
+.jekyll-metadata
+_site
+
+# Serverless Functions
+.vercel/
+.netlify/
+
+# Local Environment Variables
+# IMPORTANT: DO NOT COMMIT YOUR ACTUAL API KEYS OR SECRETS
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDEs and editors
+/.idea
+.project
+.classpath
+.c9/
+*.launch
+.sublime/
+*.tmproj
+*.tmproject
+*.swp
+*.swo
+*.sublime-workspace
+
+# VSCode specific
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# Firebase
+.firebase/
+firebase-debug.log
+database-debug.log
+firestore-debug.log
+
+# Misc
+.eslintcache
+*.min.js
+*.map
+coverage
