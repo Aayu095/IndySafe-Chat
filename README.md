@@ -27,8 +27,10 @@
 ---
 
 ## ✨ Core Features
-*   🗣️ **Conversational AI:** Natural language safety queries & guidance.
-*   🚨 **Hazard Reporting:** Submit incidents via chat or dedicated form. Report images are geo-tagged with approximate upload location.
+*   🗣️ **Conversational AI:**
+  Natural language safety queries & guidance.
+*   🚨 **Hazard Reporting:**
+  Submit incidents via chat or dedicated form. Report images are geo-tagged with approximate upload location.
 *   🗺️ **Real-Time Mapping:** View incidents on a Geoapify static map.
 *   📢 **Real-Time Alerts:** Instant toast notifications for official safety alerts.
 *   🎤 **Voice Input:** Speak directly to the chatbot (Web Speech API).
