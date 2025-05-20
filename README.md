@@ -137,12 +137,12 @@ Contributions, issues, and feature requests are welcome! Feel free to check [iss
 ---
 
 ## 📄 License
-Distributed under the MIT License. See `LICENSE` file for more information (if you add one).
-
+This project is licensed under the MIT License.  
+See the [LICENSE](./LICENSE) file for details.
 ---
 
 ## 📬 Contact
-Aayushman Singh Chauhan - singhaayushman095@gmail.com
+For any queries, ideas, or collaborations, reach out at: 📧 aayushigoel73@gmail.com
 
 Project Link: [https://github.com/Aayu095/IndySafe-Chat](https://github.com/Aayu095/IndySafe-Chat) <!-- Ensure this is your correct repo URL -->
 
