@@ -270,7 +270,7 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
         undefined 
     );
     
-    await delay(500); // Delay to ensure "Generating map..." message is visible
+    await delay(500); 
 
     try {
         let fetchedIncidentsForMap: MapIncident[] = [];
@@ -326,6 +326,57 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
     }
   }, [setMessages]); 
 
+  const _fetchAndDisplayReportsByCategory = useCallback(async (categoryToQuery: HazardCategory, loadingBotMessageId: string) => {
+    const updateBotMessage = (text: string, type: ChatMessage['type'] = 'text', data?: ChatMessage['data']) => {
+      setMessages(prev => prev.map(msg => 
+        msg.id === loadingBotMessageId ? { ...msg, text, type, data, isLoading: false, timestamp: Date.now() } : msg
+      ));
+    };
+
+    if (!db) {
+      updateBotMessage('Hazard listing is currently unavailable. Please ensure Firebase is configured correctly.', 'error');
+      setIsLoading(false);
+      return;
+    }
+
+    try {
+      const reportsQuery = query(
+        collection(db, "hazard_reports"),
+        where("category", "==", categoryToQuery),
+        orderBy("timestamp", "desc"),
+        limit(10)
+      );
+      const querySnapshot = await getDocs(reportsQuery);
+      if (querySnapshot.empty) {
+        updateBotMessage(`No recent hazard reports found for the category: ${categoryToQuery}.`);
+      } else {
+        const reportsData: ReportUIData[] = querySnapshot.docs.map((docSnap) => {
+          const data = docSnap.data() as HazardReportDocument;
+          const ts = data.timestamp as Timestamp;
+          return {
+            id: docSnap.id,
+            category: data.category,
+            location: data.location,
+            formattedAddress: data.formattedAddress,
+            details: data.details,
+            upvotes: data.upvotes || 0,
+            downvotes: data.downvotes || 0,
+            timestamp: ts?.toDate()?.getTime(),
+            latitude: data.latitude,
+            longitude: data.longitude,
+          };
+        });
+        updateBotMessage(`Found ${querySnapshot.size} '${categoryToQuery}' report(s):`, 'report_list', { reports: reportsData });
+      }
+    } catch (error: any) {
+      console.error(`Error fetching ${categoryToQuery} reports:`, error);
+      updateBotMessage(`Sorry, I couldn't fetch reports for '${categoryToQuery}' at this time. Details: ${error.message}`, 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [setMessages]);
+
+
   const handleSendMessage = useCallback(async (messageInput: string | { 
     text: string; 
     uploadedImageUri?: string;
@@ -351,13 +402,15 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
     const parts = userMessageText.split(' ');
     const isMapQuickActionFromButton = userMessageText.toLowerCase() === '/map' && parts.length === 1;
     
-    // Add user message UNLESS it's the initial '/map' from the quick action button
-    if (!isMapQuickActionFromButton) {
+    if (!isMapQuickActionFromButton) { // Don't add plain "/map" from button yet
       addMessage({ sender: 'user', text: userMessageText, uploadedImageUri, uploadedImageLatitude, uploadedImageLongitude });
     }
     
     setIsLoading(true); 
     
+    // This ID will be used for the initial loading message, UNLESS it's a map quick action
+    const genericLoadingBotMessageId = String(Date.now() + Math.random() + "_loading");
+
     if (isMapQuickActionFromButton) { 
         const geoLocLoadingMsgId = String(Date.now() + Math.random() + "_geo_loc_loading");
         addMessage({
@@ -367,14 +420,13 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
             isLoading: true, 
             timestamp: Date.now()
         });
-        await delay(500); // Delay to ensure "Attempting..." message is visible
+        await delay(500); 
         
         if (navigator.geolocation) {
           navigator.geolocation.getCurrentPosition(
             async (position) => {
               const { latitude, longitude } = position.coords;
               
-              // Update the "Attempting..." message to "Location found."
               setMessages(prev => prev.map(msg => msg.id === geoLocLoadingMsgId ? {
                   ...msg,
                   text: "Location found.", 
@@ -382,10 +434,8 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
                   timestamp: Date.now()
               } : msg));
 
-              // Add the user's effective command message
               addMessage({ sender: 'user', text: `/map ${latitude.toFixed(6)} ${longitude.toFixed(6)}` });
               
-              // Add a NEW bot message for map generation and pass its ID
               const mapDisplayMsgId = String(Date.now() + Math.random() + "_map_display");
               addMessage({
                 id: mapDisplayMsgId,
@@ -422,13 +472,12 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
         return; 
     }
 
-    // For all other commands
-    const genericLoadingBotMessageId = String(Date.now() + Math.random() + "_loading");
+    // For all other commands, add the generic loading message
     addMessage({ id: genericLoadingBotMessageId, sender: 'bot', text: '', isLoading: true, timestamp: Date.now() });
     
-    const updateOrAddBotMessage = (update: Partial<Omit<ChatMessage, 'id' | 'timestamp' | 'sender'>>, clearLoading = true) => {
+    const updateOrAddBotMessage = (update: Partial<Omit<ChatMessage, 'id' | 'timestamp' | 'sender'>>, targetMessageId: string, clearLoading = true) => {
         setMessages(prev => {
-            const existingMsgIndex = prev.findIndex(msg => msg.id === genericLoadingBotMessageId);
+            const existingMsgIndex = prev.findIndex(msg => msg.id === targetMessageId);
             if (existingMsgIndex !== -1) {
                 return prev.map((msg, index) => 
                     index === existingMsgIndex ? 
@@ -441,11 +490,9 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
                     } : msg
                 );
             } else { 
-                // This branch should ideally not be hit if genericLoadingBotMessageId was just added.
-                // But as a fallback, add a new message.
                 const newMsgId = String(Date.now() + Math.random());
                 return [
-                    ...prev.filter(msg => msg.isLoading !== true || (genericLoadingBotMessageId && msg.id !== genericLoadingBotMessageId)), 
+                    ...prev.filter(msg => msg.isLoading !== true || (targetMessageId && msg.id !== targetMessageId)), 
                     { 
                         id: newMsgId,
                         sender: 'bot',
@@ -453,7 +500,7 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
                         isLoading: !clearLoading, 
                         timestamp: Date.now(),
                         ...update,
-                        type: update.type || 'text', // Ensure type is set
+                        type: update.type || 'text', 
                     }
                 ];
             }
@@ -461,25 +508,29 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
     };
     
     if (pendingCategorySelectionFor && userMessageText.toLowerCase() !== '/cancel') {
-      updateOrAddBotMessage({
-        text: `Please select a category using the buttons above. Or type /cancel to exit ${pendingCategorySelectionFor === 'report_hazard' ? 'reporting' : 'listing'}.`,
-        type: 'text',
-      });
-      setIsLoading(false);
-      return;
+      const isCategorySelectionFromButtons = HAZARD_CATEGORIES.includes(userMessageText as HazardCategory) || userMessageText === '/cancel';
+      const isFulfillingListCommand = pendingCategorySelectionFor === 'list_reports' && userMessageText.toLowerCase().startsWith('/list_hazards ') && userMessageText.split(' ').length > 2;
+      const isFulfillingReportCommand = pendingCategorySelectionFor === 'report_hazard' && userMessageText.toLowerCase().startsWith('/report hazard ');
+
+      if (!isCategorySelectionFromButtons && !isFulfillingListCommand && !isFulfillingReportCommand) {
+        updateOrAddBotMessage({
+          text: `Please select a category using the buttons above. Or type /cancel to exit ${pendingCategorySelectionFor === 'report_hazard' ? 'reporting' : 'listing'}.`,
+          type: 'text',
+        }, genericLoadingBotMessageId);
+        setIsLoading(false);
+        return;
+      }
     }
     if (userMessageText.toLowerCase() === '/cancel') {
         setHazardReportingStage('idle');
         setPendingCategorySelectionFor(null);
         setCurrentHazardReport({});
-        updateOrAddBotMessage({ text: "Action cancelled."});
+        updateOrAddBotMessage({ text: "Action cancelled."}, genericLoadingBotMessageId);
         setIsLoading(false);
         return;
     }
 
     if (hazardReportingStage !== 'idle' && hazardReportingStage !== 'awaiting_category') {
-      // Remove the generic loading message before calling processHazardReportInput, 
-      // as it manages its own specific loading/response messages.
       setMessages(prev => prev.filter(msg => msg.id !== genericLoadingBotMessageId));
       await processHazardReportInput(userMessageText);
       setIsLoading(false); 
@@ -491,7 +542,7 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
          updateOrAddBotMessage({
           text: 'Hazard reporting is currently unavailable. Please ensure Firebase is configured correctly.',
           type: 'error',
-        });
+        }, genericLoadingBotMessageId);
       } else {
         setHazardReportingStage('awaiting_category');
         setPendingCategorySelectionFor('report_hazard');
@@ -500,14 +551,12 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
           text: 'Please select a hazard category to report:',
           type: 'category_selector',
           data: { categories: HAZARD_CATEGORIES },
-        });
+        }, genericLoadingBotMessageId);
       }
     } else if (userMessageText.toLowerCase().startsWith('/map') && parts.length === 3) { 
         const lat = parseFloat(parts[1]);
         const lon = parseFloat(parts[2]);
         if (!isNaN(lat) && !isNaN(lon)) {
-           // genericLoadingBotMessageId is already added.
-           // Update it to say "Generating map..." and then pass it to _generateMapWithCoordinates
            setMessages(prev => prev.map(msg => msg.id === genericLoadingBotMessageId ? {
                ...msg,
                text: `Generating map for your area (Centered: ${lat.toFixed(4)}, ${lon.toFixed(4)})...`,
@@ -515,78 +564,31 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
            } : msg));
            await _generateMapWithCoordinates(lat, lon, genericLoadingBotMessageId); 
         } else {
-          updateOrAddBotMessage({ text: "Invalid coordinates for /map. Please use format: /map <latitude> <longitude>", type: 'error' });
+          updateOrAddBotMessage({ text: "Invalid coordinates for /map. Please use format: /map <latitude> <longitude>", type: 'error' }, genericLoadingBotMessageId);
         }
     } else if (userMessageText.toLowerCase().startsWith('/list_hazards')) {
-        if (!db) {
+        const categoryQuery = parts.slice(1).join(' ').trim();
+        if (!categoryQuery) { 
+            setPendingCategorySelectionFor('list_reports');
             updateOrAddBotMessage({
-                text: 'Hazard listing is currently unavailable. Please ensure Firebase is configured correctly.',
-                type: 'error',
-            });
+                text: 'Please select a category to list reports for:',
+                type: 'category_selector',
+                data: { categories: HAZARD_CATEGORIES },
+            }, genericLoadingBotMessageId);
         } else {
-            const categoryQuery = parts.slice(1).join(' ').trim();
-            if (!categoryQuery) { 
-                setPendingCategorySelectionFor('list_reports');
+            const isValidCategory = HAZARD_CATEGORIES.some(
+                (cat) => cat.toLowerCase() === categoryQuery.toLowerCase()
+            );
+            if (!isValidCategory) {
                 updateOrAddBotMessage({
-                    text: 'Please select a category to list reports for:',
-                    type: 'category_selector',
-                    data: { categories: HAZARD_CATEGORIES },
-                });
+                    text: `Invalid category: '${categoryQuery}'. Please use one of the following: ${HAZARD_CATEGORIES.join(', ')} or use the 'View Reports by Type' button.`,
+                    type: 'error',
+                }, genericLoadingBotMessageId);
             } else {
-                const isValidCategory = HAZARD_CATEGORIES.some(
-                    (cat) => cat.toLowerCase() === categoryQuery.toLowerCase()
-                );
-                if (!isValidCategory) {
-                    updateOrAddBotMessage({
-                        text: `Invalid category: '${categoryQuery}'. Please use one of the following: ${HAZARD_CATEGORIES.join(', ')} or use the 'View Reports by Type' button.`,
-                        type: 'error',
-                    });
-                } else {
-                    const categoryToQuery = HAZARD_CATEGORIES.find(cat => cat.toLowerCase() === categoryQuery.toLowerCase()) as HazardCategory;
-                    try {
-                        const reportsQuery = query(
-                            collection(db, "hazard_reports"),
-                            where("category", "==", categoryToQuery),
-                            orderBy("timestamp", "desc"),
-                            limit(10)
-                        );
-                        const querySnapshot = await getDocs(reportsQuery);
-                        if (querySnapshot.empty) {
-                            updateOrAddBotMessage({
-                                text: `No recent hazard reports found for the category: ${categoryToQuery}.`,
-                            });
-                        } else {
-                            const reportsData: ReportUIData[] = querySnapshot.docs
-                                .map((docSnap) => {
-                                    const data = docSnap.data() as HazardReportDocument;
-                                    const ts = data.timestamp as Timestamp;
-                                    return {
-                                        id: docSnap.id,
-                                        category: data.category,
-                                        location: data.location, 
-                                        formattedAddress: data.formattedAddress,
-                                        details: data.details,
-                                        upvotes: data.upvotes || 0,
-                                        downvotes: data.downvotes || 0,
-                                        timestamp: ts?.toDate()?.getTime(),
-                                        latitude: data.latitude,
-                                        longitude: data.longitude,
-                                    };
-                                });
-                            updateOrAddBotMessage({
-                                text: `Found ${querySnapshot.size} '${categoryToQuery}' report(s):`,
-                                type: 'report_list',
-                                data: { reports: reportsData }
-                            });
-                        }
-                    } catch (error: any) {
-                        console.error(`Error fetching ${categoryToQuery} reports:`, error);
-                        updateOrAddBotMessage({
-                            text: `Sorry, I couldn't fetch reports for '${categoryToQuery}' at this time. Details: ${error.message}`,
-                            type: 'error',
-                        });
-                    }
-                }
+                const categoryToQuery = HAZARD_CATEGORIES.find(cat => cat.toLowerCase() === categoryQuery.toLowerCase()) as HazardCategory;
+                // Call the helper function directly
+                updateOrAddBotMessage({ text: `Fetching reports for '${categoryToQuery}'...` }, genericLoadingBotMessageId, false);
+                await _fetchAndDisplayReportsByCategory(categoryToQuery, genericLoadingBotMessageId);
             }
         }
     } else if (userMessageText.toLowerCase().startsWith('/nearby_hazards ')) {
@@ -594,13 +596,13 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
             updateOrAddBotMessage({
                 text: 'Nearby hazard search is currently unavailable. Please ensure Firebase is configured correctly.',
                 type: 'error',
-            });
+            }, genericLoadingBotMessageId);
         } else {
             if (parts.length < 3 || parts.length > 4) {
                 updateOrAddBotMessage({
                     text: "Invalid format. Use: /nearby_hazards <latitude> <longitude> [radius_in_km]\nExample: /nearby_hazards 39.7 -86.1 5 (radius is optional, defaults to 5km)",
                     type: 'error',
-                });
+                }, genericLoadingBotMessageId);
             } else {
                 const lat = parseFloat(parts[1]);
                 const lon = parseFloat(parts[2]);
@@ -609,7 +611,7 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
                     updateOrAddBotMessage({
                         text: "Invalid latitude, longitude, or radius. Please provide valid numbers.\nExample: /nearby_hazards 39.7 -86.1 5",
                         type: 'error',
-                    });
+                    }, genericLoadingBotMessageId);
                 } else {
                     try {
                         const reportsQuery = query(
@@ -645,20 +647,20 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
                         if (nearbyReportsData.length === 0) {
                             updateOrAddBotMessage({
                                 text: `No hazard reports found within ${radiusKm}km of ${lat.toFixed(4)}, ${lon.toFixed(4)}. Ensure reports have geocoded coordinates.`,
-                            });
+                            }, genericLoadingBotMessageId);
                         } else {
                             updateOrAddBotMessage({
                                 text: `Found ${nearbyReportsData.length} hazard report(s) within ${radiusKm}km of ${lat.toFixed(4)}, ${lon.toFixed(4)}:`,
                                 type: 'report_list',
                                 data: { reports: nearbyReportsData }
-                            });
+                            }, genericLoadingBotMessageId);
                         }
                     } catch (error: any) {
                         console.error(`Error fetching nearby reports:`, error);
                         updateOrAddBotMessage({
                             text: `Sorry, I couldn't fetch nearby reports at this time. Details: ${error.message}`,
                             type: 'error',
-                        });
+                        }, genericLoadingBotMessageId);
                     }
                 }
             }
@@ -668,13 +670,13 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
             updateOrAddBotMessage({
                 text: 'Nearby alert search is currently unavailable. Please ensure Firebase is configured correctly.',
                 type: 'error',
-            });
+            }, genericLoadingBotMessageId);
         } else {
             if (parts.length < 3 || parts.length > 4) {
                 updateOrAddBotMessage({
                     text: "Invalid format. Use: /alerts_near <latitude> <longitude> [radius_in_km]\nExample: /alerts_near 39.7 -86.1 5 (radius is optional, defaults to 5km)",
                     type: 'error',
-                });
+                }, genericLoadingBotMessageId);
             } else {
                 const lat = parseFloat(parts[1]);
                 const lon = parseFloat(parts[2]);
@@ -683,7 +685,7 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
                     updateOrAddBotMessage({
                         text: "Invalid latitude, longitude, or radius. Please provide valid numbers.\nExample: /alerts_near 39.7 -86.1 5",
                         type: 'error',
-                    });
+                    }, genericLoadingBotMessageId);
                 } else {
                     try {
                         const alertsQuery = query(
@@ -704,7 +706,7 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
                         if (nearbyAlerts.length === 0) {
                             updateOrAddBotMessage({
                                 text: `No official alerts with coordinates found within ${radiusKm}km of ${lat.toFixed(4)}, ${lon.toFixed(4)}. Ensure alerts in Firestore have latitude and longitude fields.`,
-                            });
+                            }, genericLoadingBotMessageId);
                         } else {
                             const alertsText = nearbyAlerts
                                 .map((alert, index) => {
@@ -716,14 +718,14 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
                                 .join('\n\n');
                             updateOrAddBotMessage({
                                 text: `Found ${nearbyAlerts.length} official alert(s) within ${radiusKm}km of ${lat.toFixed(4)}, ${lon.toFixed(4)}:\n${alertsText}`,
-                            });
+                            }, genericLoadingBotMessageId);
                         }
                     } catch (error: any) {
                         console.error(`Error fetching nearby alerts:`, error);
                         updateOrAddBotMessage({
                             text: `Sorry, I couldn't fetch nearby alerts at this time. Details: ${error.message}`,
                             type: 'error',
-                        });
+                        }, genericLoadingBotMessageId);
                     }
                 }
             }
@@ -733,7 +735,7 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
             updateOrAddBotMessage({
                 text: 'Cannot create mock alert. Firebase is not configured correctly.',
                 type: 'error',
-            });
+            }, genericLoadingBotMessageId);
         } else {
             const mockAlert: Omit<AlertDocument, 'id'> = { 
                 title: "Mock Critical Weather Alert",
@@ -747,7 +749,7 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
                 await addDoc(collection(db, "alerts"), mockAlert);
                 updateOrAddBotMessage({
                     text: "A mock 'Critical Weather Alert' has been created and saved to Firestore. It should appear as a Toast notification shortly.",
-                });
+                }, genericLoadingBotMessageId);
                  toast({
                     title: "Mock Critical Alert Created",
                     description: "Critical Weather Alert added to Firestore.",
@@ -757,7 +759,7 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
                 updateOrAddBotMessage({
                     text: `Sorry, there was an issue creating the mock alert. Details: ${error.message}`,
                     type: 'error',
-                });
+                }, genericLoadingBotMessageId);
                 toast({
                     title: "Error Creating Mock Alert",
                     description: (error as Error).message,
@@ -770,7 +772,7 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
             updateOrAddBotMessage({
                 text: 'Cannot fetch your reports. User session or Firebase not available.',
                 type: 'error',
-            });
+            }, genericLoadingBotMessageId);
         } else {
             try {
                 const reportsQuery = query(
@@ -783,7 +785,7 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
                 if (querySnapshot.empty) {
                     updateOrAddBotMessage({
                         text: "You haven't submitted any reports in this session yet.",
-                    });
+                    }, genericLoadingBotMessageId);
                 } else {
                     const reportsData: ReportUIData[] = querySnapshot.docs
                         .map((docSnap) => {
@@ -806,14 +808,14 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
                         text: `Here are your 5 most recent reports:`,
                         type: 'report_list',
                         data: { reports: reportsData }
-                    });
+                    }, genericLoadingBotMessageId);
                 }
             } catch (error: any) {
                 console.error(`Error fetching your reports:`, error);
                 updateOrAddBotMessage({
                     text: `Sorry, I couldn't fetch your reports at this time. Details: ${error.message}`,
                     type: 'error',
-                });
+                }, genericLoadingBotMessageId);
             }
         }
     } else if (userMessageText.toLowerCase() === '/reset_chat') {
@@ -827,11 +829,11 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
             title: "Chat Reset",
             description: "The chat history has been cleared.",
         });
-        setMessages(prev => prev.filter(msg => msg.id !== genericLoadingBotMessageId)); // Remove loading message
-        setIsLoading(false); // Ensure isLoading is false after reset
-        return; // Important: return here to prevent further processing by smartEmergencyAssistance
+        setMessages(prev => prev.filter(msg => msg.id !== genericLoadingBotMessageId)); 
+        setIsLoading(false); 
+        return; 
     }
-    else { // Default to smart assistance
+    else { 
       try {
         const coordRegex = /(-?\d{1,2}(\.\d+)?)\s*[,]?\s*(-?\d{1,3}(\.\d+)?)/;
         const match = userMessageText.match(coordRegex);
@@ -853,24 +855,23 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
             assistanceInput.longitude = parseFloat(match[3]);
         }
         const assistanceResponse = await smartEmergencyAssistance(assistanceInput);
-        updateOrAddBotMessage({ text: assistanceResponse.advice });
+        updateOrAddBotMessage({ text: assistanceResponse.advice }, genericLoadingBotMessageId);
       } catch (error: any) {
         console.error('Error getting smart assistance:', error);
         updateOrAddBotMessage({
           text: (error as Error).message || 'Sorry, I encountered an issue trying to respond. Please try asking differently.',
           type: 'error',
-        });
+        }, genericLoadingBotMessageId);
       }
     }
-    // Ensure isLoading is false UNLESS we are in the map geolocation flow which handles its own isLoading state.
-    if (!(userMessageText.toLowerCase() === '/map' && parts.length === 1 && navigator.geolocation)) {
+    if (!(isMapQuickActionFromButton && navigator.geolocation)) {
       setIsLoading(false);
     }
-  }, [addMessage, pendingCategorySelectionFor, hazardReportingStage, processHazardReportInput, anonymousUserId, toast, _generateMapWithCoordinates, setMessages]); 
+  }, [addMessage, pendingCategorySelectionFor, hazardReportingStage, processHazardReportInput, anonymousUserId, toast, _generateMapWithCoordinates, _fetchAndDisplayReportsByCategory]); 
   
-  const handleCategorySelect = useCallback( (category: HazardCategory | '/cancel') => {
+  const handleCategorySelect = useCallback( async (category: HazardCategory | '/cancel') => {
     const currentAction = pendingCategorySelectionFor; 
-    
+
     if (category === '/cancel') {
         addMessage({ sender: 'user', text: 'Cancel Action' }); 
         setHazardReportingStage('idle');
@@ -879,7 +880,7 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
         addMessage({ sender: 'bot', text: "Action cancelled."}); 
         return;
     }
-
+    
     if (currentAction === 'report_hazard' && hazardReportingStage === 'awaiting_category') {
       addMessage({ sender: 'user', text: `Selected category: ${category}` }); 
       setCurrentHazardReport((prev) => ({ ...prev, category }));
@@ -891,26 +892,30 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
         type: 'text', 
       });
     } else if (currentAction === 'list_reports') {
+      addMessage({ sender: 'user', text: `/list_hazards ${category}` });
+      
+      const botLoadingId = String(Date.now() + Math.random() + "_list_loading");
+      addMessage({ id: botLoadingId, sender: 'bot', text: `Fetching reports for '${category}'...`, isLoading: true });
+      
+      setIsLoading(true);
       setPendingCategorySelectionFor(null); 
-      handleSendMessage(`/list_hazards ${category}`); 
+      await _fetchAndDisplayReportsByCategory(category, botLoadingId);
     }
-  }, [addMessage, hazardReportingStage, pendingCategorySelectionFor, handleSendMessage]);
+  }, [addMessage, hazardReportingStage, pendingCategorySelectionFor, _fetchAndDisplayReportsByCategory]);
 
 
   useEffect(() => {
-    if (resetTrigger === undefined) return; 
-
-    // Reset logic if triggered by parent (e.g. header reset button)
-    setMessages([
-        { id: INITIAL_WELCOME_ID, sender: 'bot', text: WELCOME_MESSAGE, timestamp: Date.now() }
-    ]);
-    setHazardReportingStage('idle');
-    setPendingCategorySelectionFor(null);
-    setCurrentHazardReport({});
-    setProcessedAlertIds(new Set());
-    setIsLoading(false); 
-    
-  }, [resetTrigger]); 
+    // This effect runs only once on component mount due to empty dependency array
+    // or when resetTrigger changes, forcing a re-evaluation if the messages array was cleared.
+    if (messages.length === 0 || (resetTrigger && resetTrigger > 0 && messages.length > 0 && messages[0].id !== INITIAL_WELCOME_ID) ) {
+       setMessages([{ id: INITIAL_WELCOME_ID, sender: 'bot', text: WELCOME_MESSAGE, timestamp: Date.now() }]);
+       setHazardReportingStage('idle');
+       setPendingCategorySelectionFor(null);
+       setCurrentHazardReport({});
+       setProcessedAlertIds(new Set());
+       setIsLoading(false);
+    }
+  }, [resetTrigger]); // Only re-run if resetTrigger changes (or initial mount if messages is empty)
 
   useEffect(() => {
     if (!db) {
@@ -1068,3 +1073,5 @@ export default function ChatInterface({ resetTrigger }: ChatInterfaceProps) {
   );
 }
 
+
+    
